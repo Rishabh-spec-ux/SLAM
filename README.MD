@@ -379,7 +379,7 @@ sequenceDiagram
     participant Sensor as sensor.py
     participant Frontend as LidarFrontend
     participant EKF as EKFSLAM
-    participant Loop as LoopClosureDetector
+    participant LC as LoopClosureDetector
     participant Map as MappingSurface
 
     User->>Main: W/A/S/D/M input
@@ -391,8 +391,8 @@ sequenceDiagram
     Main->>Frontend: build_observations(measurements)
     Frontend-->>Main: observations
     Main->>EKF: update(observations)
-    Main->>Loop: register_and_detect(ekf_pose, measurements)
-    Loop-->>Main: optional loop match
+    Main->>LC: register_and_detect(ekf_pose, measurements)
+    LC-->>Main: optional loop match
     Main->>EKF: apply_loop_closure(if matched)
     Main->>Map: accumulate hit points (if mapping active)
     Main->>Main: render trajectories, rays, landmarks, poses
