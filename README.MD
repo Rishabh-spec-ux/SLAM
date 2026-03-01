@@ -1,26 +1,17 @@
 # Complete 2D SLAM Pipeline (Pygame)
 
-This project now implements a full end-to-end SLAM simulation loop with:
+This project implements an end-to-end 2D SLAM pipeline with:
 
-- robot motion model
+- keyboard-controlled robot motion (`W/A/S/D`)
+- collision-safe movement against black obstacles
 - noisy odometry
-- 360-degree LiDAR simulation
-- scan-to-landmark frontend
-- EKF-SLAM state estimation
+- 360-degree LiDAR simulation with uncertainty
+- scan frontend and landmark association
+- EKF-SLAM (predict + update + landmark augmentation)
 - loop-closure detection and global drift correction
-- realtime visualization of true pose, estimated pose, map points, rays, and trajectory
+- map generation with pause/save (`M` key)
 
-The implementation is educational and modular. It is complete enough to study how each SLAM block interacts in one runnable system.
-
-## Repository Structure
-
-- `env.py`: loads map image, owns the render surface, and stores a point cloud.
-- `sensor.py`: simulates LiDAR range sensing by ray casting over `map.png`.
-- `slam.py`: SLAM core (motion model, odometry noise, landmark extraction, LiDAR frontend, EKF-SLAM, loop closure).
-- `main.py`: runtime loop connecting all components.
-- `map.png`: occupancy-like map image (dark pixels treated as obstacles).
-
-## How To Run
+## Quick Run
 
 ```bash
 python3 main.py
@@ -30,409 +21,403 @@ python3 main.py
 
 - `W`: move forward
 - `S`: move backward
-- `A`: rotate left
-- `D`: rotate right
-- `M`: stop mapping and save the built SLAM map to `maps/`; press `M` again to resume mapping
-
-## System Data Flow
-
-Per frame, `main.py` executes:
-
-1. Compute `W/A/S/D` control command `(v_cmd, w_cmd)`.
-2. Update **true pose** with kinematic model and collision checking against black obstacles.
-3. Create **noisy odometry** sample `(v_odom, w_odom)` from effective executed motion.
-4. EKF predict step with odometry.
-5. Run LiDAR scan on map at true pose.
-6. Convert LiDAR hits into landmark observations.
-7. EKF update step with observations.
-8. Run loop-closure detector from scan descriptor + revisited position.
-9. If loop closes, apply global rigid correction to robot and landmarks.
-10. If mapping is active, write scan hit points into the generated map image.
-11. Render map, rays, point cloud, trajectories, poses, and status text.
-
-## Detailed File Documentation
-
-## `env.py`
-
-### Purpose
-
-Environment and rendering abstraction.
-
-### Class: `Environment`
-
-### `__init__(map_filename="map.png")`
-
-- Resolves map path relative to script directory.
-- Validates that the map exists.
-- Initializes pygame.
-- Loads the map image as a surface.
-- Sets window size equal to map size.
-- Converts map surface to display pixel format for faster drawing.
-- Initializes `point_cloud` as list of `(x, y)` tuples.
-
-### `add_point(x, y)`
-
-Appends one point into `point_cloud`.
-
-### `extend_point_cloud(points)`
-
-Appends many points at once.
-
-### `clear_point_cloud()`
-
-Removes current cloud content.
-
-### `draw(update_display=True)`
-
-- Blits base map.
-- Draws cloud points as red circles.
-- Optionally flips display.
-
-This allows `main.py` to draw overlays (rays, trajectories, UI) before final `pygame.display.flip()`.
-
-## `sensor.py`
-
-### Purpose
-
-Physics-style LiDAR sensor simulation with uncertainty.
-
-### Dataclass: `LidarMeasurement`
-
-One beam result:
-
-- `angle_deg`: final ray angle after angular noise.
-- `distance`: final measured range after range noise.
-- `hit_point`: endpoint `(x, y)` in world/map coordinates.
-- `hit`: whether beam hit obstacle or map boundary before max range.
-
-### Class: `LidarSensor`
-
-### Constructor parameters
-
-- `max_range`: max scan distance in pixels.
-- `angle_step_deg`: beam angular spacing.
-- `ray_step_px`: ray marching step size.
-- `obstacle_threshold`: dark-pixel threshold for occupancy.
-- `distance_noise_std`: Gaussian range noise sigma.
-- `angle_noise_std_deg`: Gaussian angle noise sigma.
-
-### Internal helpers
-
-- `_is_obstacle(surface, x, y)`: checks pixel darkness.
-- `_in_bounds(surface, x, y)`: bounds check.
-
-### `scan(robot_pos, map_surface, robot_heading_deg=0.0)`
-
-For each beam in 360 degrees:
-
-1. Create nominal beam angle.
-2. Add Gaussian angle noise.
-3. March along ray until obstacle or boundary or max range.
-4. Add Gaussian range noise to true range.
-5. Clamp noisy distance to valid limits.
-6. Build `LidarMeasurement` and append.
-
-Returns full scan measurements list.
-
-### `get_hit_points()`
-
-Returns only hit endpoints. Used as visual point cloud.
-
-### `draw_rays(screen, robot_pos, ...)`
-
-Draws beams and hit markers.
-
-## `slam.py`
-
-`slam.py` is the complete SLAM backend/frontend glue.
-
-## Geometry and utility
-
-### `wrap_angle(angle)`
-
-Normalizes angle to `[-pi, pi]`.
-
-### `Pose2D`
-
-Robot pose container:
-
-- `x`, `y`, `theta`
-
-### `propagate_pose(pose, v, w, dt)`
-
-Unicycle motion model used for true robot movement.
-
-If `|w|` is near zero:
-
-- `x' = x + v*dt*cos(theta)`
-- `y' = y + v*dt*sin(theta)`
-- `theta' = theta`
-
-Else:
-
-- `x' = x - (v/w)sin(theta) + (v/w)sin(theta + wdt)`
-- `y' = y + (v/w)cos(theta) - (v/w)cos(theta + wdt)`
-- `theta' = theta + wdt`
-
-## Odometry model
-
-### `OdometryModel`
-
-`sample(v_cmd, w_cmd)` returns noisy odometry controls:
-
-- `v_noisy = v_cmd + N(0, linear_std)`
-- `w_noisy = w_cmd + N(0, angular_std)`
-
-These odometry controls drive EKF prediction.
-
-## Landmark extraction from map
-
-### `MapLandmarkExtractor`
-
-Builds a static set of map landmarks from obstacle boundaries.
-
-Algorithm:
-
-1. Sample map pixels with stride (`sample_step`).
-2. Keep only dark pixels (obstacles).
-3. Keep only boundary-like obstacle pixels with at least one free neighbor.
-4. Downsample using coarse grid (`spacing_px`) to avoid dense duplicates.
-5. Assign integer IDs.
-
-Output: list of `(landmark_id, x, y)`.
-
-## LiDAR frontend / data association
-
-### `LandmarkObservation`
-
-Observation model packet:
-
-- `landmark_id`
-- `range_m`
-- `bearing_rad`
-
-### `LidarFrontend`
-
-Transforms raw LiDAR beams into EKF observations.
-
-Steps:
-
-1. Take only hit beams (optionally stride-subsampled).
-2. For each hit endpoint, find nearest extracted map landmark within association radius.
-3. Convert beam to `(range, bearing)` relative to current true pose.
-4. Keep one best observation per landmark (closest range).
-5. Return sorted observation list (capped by `max_observations`).
-
-This is the scan frontend for EKF measurement updates.
-
-## EKF-SLAM core
-
-### `EKFSLAM`
-
-State vector:
-
-- `mu = [x, y, theta, l1x, l1y, l2x, l2y, ...]^T`
-
-Covariance:
-
-- `sigma` with matching dimensions.
-
-Landmark bookkeeping:
-
-- `landmark_indices: dict[landmark_id -> state_index]`
-
-### Predict step: `predict(v, w, dt)`
-
-- Propagates robot state using unicycle equations.
-- Builds motion Jacobian `G`.
-- Injects process noise only on robot block.
-- Updates covariance:
-  - `Sigma = G * Sigma * G^T + R`
-
-### Landmark initialization: `_augment_landmark(observation)`
-
-For unseen landmark ID:
-
-1. Convert `(range, bearing)` to world `(lx, ly)` from current robot estimate.
-2. Append landmark into state vector.
-3. Expand covariance matrix.
-4. Use Jacobians (`Jr`, `Jz`) to initialize cross-covariances and landmark covariance correctly.
-
-### Measurement update: `update(observations)`
-
-For each known landmark observation:
-
-1. Compute predicted measurement `z_hat` from current state.
-2. Build measurement Jacobian `H`.
-3. Innovation:
-   - `nu = z - z_hat`, with wrapped bearing residual.
-4. Kalman gain:
-   - `K = Sigma * H^T * inv(H*Sigma*H^T + Q)`
-5. Correct state:
-   - `mu = mu + K*nu`
-6. Correct covariance:
-   - `Sigma = (I - K*H)*Sigma`
-
-Bearing is wrapped after every update to prevent angle discontinuities.
-
-### Loop-closure correction: `apply_loop_closure(target_pose)`
-
-When a loop closure is detected, we compute a rigid correction from current estimated robot pose to target historical pose:
-
-- rotation by `dtheta`
-- translation `(tx, ty)`
-
-Then apply that transform to:
-
-- robot `(x, y, theta)`
-- all landmark positions in state
-
-This reduces global drift in one step. Covariance is slightly inflated afterward to reduce overconfidence after hard correction.
-
-## Loop-closure detector
-
-### `LoopClosureDetector`
-
-Maintains keyframe history:
-
-- pose history
-- scan descriptors
-
-### Descriptor
-
-For each scan, build a compact descriptor by splitting beam distances into bins and averaging per bin.
-
-### Detection logic
-
-For current frame:
-
-1. Search only older frames beyond `min_separation`.
-2. Keep candidates spatially near current estimated pose.
-3. Compute descriptor difference score (mean absolute difference).
-4. Accept best candidate if score < threshold and not in cooldown.
-
-Returns `LoopClosureMatch` with:
-
-- current frame
-- matched historical frame
-- score
-- target pose for correction
-
-## `main.py`
-
-### Purpose
-
-Realtime orchestrator combining environment + sensor + SLAM backend + visualization.
-
-### Setup sequence
-
-1. Create `Environment`.
-2. Create `LidarSensor`.
-3. Initialize true pose.
-4. Initialize odometry model.
-5. Initialize EKF with slight initial offset (to visualize convergence).
-6. Extract map landmarks.
-7. Build LiDAR frontend.
-8. Create loop-closure detector.
-9. Start frame timer and UI font.
-
-### Movement model
-
-- Keyboard only:
-  - `W`: positive linear velocity
-  - `S`: negative linear velocity
-  - `A`: negative angular velocity (left rotation)
-  - `D`: positive angular velocity (right rotation)
-
-### Collision model
-
-- Robot has a circular footprint (`robot_radius` in pixels).
-- Candidate motion is split into:
-  - rotation update
-  - translation update
-- Translation is rejected if robot center or footprint ring touches:
-  - any black obstacle pixel (`R/G/B < obstacle_threshold`)
-  - map boundary (treated as blocked)
-- This prevents passing through black lines in front or behind the robot.
-
-### Mapping stop/save behavior
-
-- Mapping runs continuously by default.
-- On `M` key press while mapping is active:
-  - mapping pauses
-  - current generated map is saved to `maps/slam_map_YYYYMMDD_HHMMSS.png`
-- Press `M` again to resume mapping updates.
-
-### Frame sequence (detailed)
-
-1. Read events and handle mapping stop/save toggle (`M`).
-2. Compute controls.
-3. Propagate true pose with collision checking.
-5. Sample noisy odometry and run EKF predict.
-6. Scan LiDAR from true pose.
-7. Convert scan to landmark observations.
-8. EKF update with observations.
-9. Attempt loop closure and apply correction if found.
-10. Store true + estimated trajectories.
-11. Update point cloud from scan hits.
-12. If mapping is active, burn hit points into generated map image.
-13. Draw map and overlays:
-   - LiDAR beams
-   - true trajectory (green)
-   - estimated trajectory (blue)
-   - estimated landmarks (yellow)
-   - true robot (green dot)
-   - estimated robot (blue dot)
-   - telemetry text, collision warning, loop-closure banner, and saved-map status
-14. Flip display.
+- `A`: turn left
+- `D`: turn right
+- `M`: toggle mapping pause/resume
+  - when pressed while mapping is running, a map snapshot is saved to `maps/slam_map_YYYYMMDD_HHMMSS.png`
+
+## Repository Structure
+
+- `main.py`: runtime orchestrator and rendering loop
+- `env.py`: map loading, display surface, point cloud drawing
+- `sensor.py`: LiDAR ray-casting simulation and noisy measurements
+- `slam.py`: motion, odometry, landmarks, EKF-SLAM, loop closure
+- `map.png`: static occupancy-like world image (dark pixels are obstacles)
+
+## System Architecture Graph
+
+```mermaid
+flowchart LR
+    U[User Input W/A/S/D/M] --> M[Motion + Collision Model]
+    M --> T[True Pose x,y,theta]
+    T --> L[LiDAR Ray Casting]
+    L --> Z[Noisy Measurements]
+    Z --> F[LiDAR Frontend + Data Association]
+    F --> O[Range/Bearing Observations]
+    O --> E[EKF-SLAM Update]
+    M --> D[Noisy Odometry]
+    D --> P[EKF-SLAM Predict]
+    P --> E
+    E --> X[Estimated Pose + Landmarks]
+    Z --> C[Loop Closure Descriptor]
+    X --> C
+    C --> R[Loop Closure Correction]
+    R --> X
+    Z --> G[Mapping Surface Update]
+    G --> S[Saved Map in maps/]
+    T --> V[Visualization]
+    X --> V
+    Z --> V
+```
+
+## Per-Frame Execution Graph
+
+```mermaid
+flowchart TD
+    A[Read Events] --> B[Read W/A/S/D Commands]
+    B --> C[Propagate with Collision Check]
+    C --> D[Compute Effective Executed Motion]
+    D --> E[Sample Noisy Odometry]
+    E --> F[EKF Predict]
+    C --> G[LiDAR Scan at True Pose]
+    G --> H[Build Landmark Observations]
+    H --> I[EKF Update]
+    G --> J[Loop Closure Descriptor]
+    I --> J
+    J --> K{Loop Closure Match?}
+    K -- Yes --> L[Apply Global Rigid Correction]
+    K -- No --> M[Skip Correction]
+    L --> N[Update Mapping Surface if Active]
+    M --> N
+    N --> O[Render and Display]
+```
+
+## Data Products and Types
+
+- True state: `Pose2D(x, y, theta)`
+- Odometry command sample: `(v_odom, w_odom)`
+- LiDAR beam: `LidarMeasurement(angle_deg, distance, hit_point, hit)`
+- EKF observation: `LandmarkObservation(landmark_id, range_m, bearing_rad)`
+- EKF state vector:
+  - `mu = [x, y, theta, l1x, l1y, l2x, l2y, ...]^T`
+- EKF covariance:
+  - `Sigma in R^(3+2N x 3+2N)`
 
 ## Coordinate and Unit Conventions
 
-- World frame is image pixel frame.
-- Origin is top-left.
-- +x right, +y down.
-- Distance unit is pixel.
-- Internal heading in radians.
-- Sensor API angle output in degrees.
+- map frame is image pixel frame
+- origin at top-left
+- +x right, +y down
+- distance unit: pixel
+- internal heading unit: radians
+- LiDAR output angle shown in degrees (converted to radians when needed)
 
-## Noise and Uncertainty Summary
+## Complete Mathematics
 
-- Motion uncertainty: `OdometryModel` Gaussian noise on `v,w`.
-- LiDAR angular uncertainty: Gaussian on beam angle.
-- LiDAR range uncertainty: Gaussian on distance.
-- EKF process noise: robot block process covariance in prediction.
-- EKF measurement noise: range/bearing covariance in update.
+## 1) Robot Motion Model (Unicycle)
 
-These combine to produce realistic drift and correction behavior.
+State at time `k`:
 
-## What “Complete” Means In This Project
+`x_k = [x, y, theta]^T`
 
-Implemented components:
+Control over timestep `dt`:
 
-- motion
-- odometry
-- LiDAR sensing
-- landmark frontend
-- EKF prediction and correction
-- online landmark-state expansion
-- loop-closure detection
-- global loop-closure correction
-- real-time visualization and telemetry
+`u_k = [v, w]^T`
 
-## Known Practical Limitations
+If angular velocity is near zero (`|w| < eps`):
 
-This is a complete educational SLAM stack, but not production robotics-grade SLAM. Current simplifications:
+`x_{k+1} = x_k + v dt cos(theta_k)`
 
-- landmarks are extracted from known static map image (not discovered from raw unknown world occupancy only)
-- nearest-neighbor association is simple and can fail in highly repetitive geometry
-- loop closure uses descriptor + proximity heuristic, not full graph optimization backend
-- covariance handling after hard loop correction is approximate
-- no dynamic obstacle handling
+`y_{k+1} = y_k + v dt sin(theta_k)`
 
-## Suggested Next Extensions
+`theta_{k+1} = theta_k`
 
-1. Replace nearest-neighbor association with gated Mahalanobis association + JCBB.
-2. Replace rigid loop correction with full pose-graph optimization.
-3. Add occupancy-grid mapping from ray inverse model and map update entropy metrics.
-4. Add robust kernels for outlier rejection.
-5. Add logging and replay support for repeatable experiments.
+Else:
+
+`x_{k+1} = x_k - (v/w) sin(theta_k) + (v/w) sin(theta_k + w dt)`
+
+`y_{k+1} = y_k + (v/w) cos(theta_k) - (v/w) cos(theta_k + w dt)`
+
+`theta_{k+1} = theta_k + w dt`
+
+Angle wrapping:
+
+`wrap(theta) = (theta + pi) mod (2pi) - pi`
+
+## 2) Collision-Constrained Motion
+
+Motion is split into rotation then translation:
+
+1. apply rotation using `w`
+2. test translated pose using `v`
+
+A translated pose is blocked if any of these are true:
+
+- robot center pixel is obstacle
+- any sampled footprint ring point is obstacle
+- point is out of bounds
+
+Obstacle predicate from map color `(R,G,B)`:
+
+`occupied = (R < threshold) AND (G < threshold) AND (B < threshold)`
+
+So if there is a black line in front or behind, robot translation is rejected.
+
+## 3) Odometry Noise Model
+
+Commanded controls from keys are not used directly by EKF; noisy odometry is sampled:
+
+`v_odom = v_eff + N(0, sigma_v^2)`
+
+`w_odom = w_eff + N(0, sigma_w^2)`
+
+where `v_eff, w_eff` come from actual executed motion after collision effects.
+
+## 4) LiDAR Measurement Model
+
+For each beam `i`:
+
+Nominal angle:
+
+`alpha_i = theta_robot + i * delta_alpha`
+
+Noisy beam angle:
+
+`alpha_i_tilde = alpha_i + N(0, sigma_alpha^2)`
+
+Ray endpoint at distance `d`:
+
+`p(d) = [x + d cos(alpha_i_tilde), y + d sin(alpha_i_tilde)]`
+
+Ray marching searches first `d*` where either:
+
+- `p(d)` leaves map bounds, or
+- `p(d)` hits obstacle pixel
+
+True range:
+
+`r_true = d*`
+
+Measured range:
+
+`r_meas = clamp(r_true + N(0, sigma_r^2), 0, r_max)`
+
+Measurement endpoint:
+
+`p_meas = [x + r_meas cos(alpha_i_tilde), y + r_meas sin(alpha_i_tilde)]`
+
+## 5) Landmark Observation Model
+
+From LiDAR hits, nearest map landmark is selected (within association radius).
+
+Observation for landmark `j`:
+
+`z = [r, b]^T`
+
+where:
+
+- `r`: measured range
+- `b`: measured bearing relative to robot heading
+
+with bearing normalization:
+
+`b = wrap(alpha_hit - theta_robot)`
+
+## 6) EKF-SLAM State Definition
+
+For `N` landmarks in state:
+
+`mu = [x, y, theta, l1x, l1y, ..., lNx, lNy]^T`
+
+Covariance:
+
+`Sigma = cov(mu)`
+
+## 7) EKF Prediction Step
+
+Nonlinear process model:
+
+`mu_bar = f(mu, u_odom)`
+
+Covariance prediction:
+
+`Sigma_bar = G Sigma G^T + R`
+
+where:
+
+- `G = df/dmu` (Jacobian of motion model)
+- `R` injects process noise into robot block (top-left 3x3)
+
+Key Jacobian entries used in code:
+
+`G[0,2] = d x_{k+1} / d theta_k`
+
+`G[1,2] = d y_{k+1} / d theta_k`
+
+All landmark components are identity through prediction.
+
+## 8) Landmark Initialization (State Augmentation)
+
+If landmark is first seen, convert polar observation to Cartesian:
+
+`lx = x + r cos(theta + b)`
+
+`ly = y + r sin(theta + b)`
+
+Append `[lx, ly]` to `mu` and grow `Sigma`.
+
+Using Jacobians:
+
+`Jr = d[lx,ly]/d[x,y,theta]`
+
+`Jz = d[lx,ly]/d[r,b]`
+
+and measurement noise:
+
+`Q = diag(sigma_r^2, sigma_b^2)`
+
+New landmark covariance block:
+
+`Sigma_ll = Jr Sigma_rr Jr^T + Jz Q Jz^T`
+
+Cross-covariances are added with existing state.
+
+## 9) EKF Measurement Update
+
+For known landmark `j`:
+
+`dx = lx - x`
+
+`dy = ly - y`
+
+`q = dx^2 + dy^2`
+
+Predicted measurement:
+
+`z_hat = [sqrt(q), wrap(atan2(dy,dx) - theta)]^T`
+
+Innovation:
+
+`nu = z - z_hat`
+
+`nu[1] = wrap(nu[1])`
+
+Measurement Jacobian `H` is built w.r.t robot and landmark states.
+
+Innovation covariance:
+
+`S = H Sigma_bar H^T + Q`
+
+Kalman gain:
+
+`K = Sigma_bar H^T S^-1`
+
+State correction:
+
+`mu = mu_bar + K nu`
+
+Covariance correction:
+
+`Sigma = (I - K H) Sigma_bar`
+
+Then symmetrization is applied numerically.
+
+## 10) Loop Closure Mathematics
+
+## Descriptor
+
+Each scan distance array is binned into `B` chunks.
+
+Descriptor value for bin `b`:
+
+`d_b = mean(range values in bin b)`
+
+Descriptor distance to old frame `t`:
+
+`score_t = mean(|d_now - d_t|)`
+
+A candidate is valid if:
+
+- frame separation > minimum
+- pose distance < spatial threshold
+- `score_t < descriptor_threshold`
+
+## Correction transform
+
+If matched to target pose `(x_t, y_t, theta_t)` from current estimated pose `(x_c, y_c, theta_c)`:
+
+`dtheta = wrap(theta_t - theta_c)`
+
+Rotation matrix:
+
+`R = [[cos dtheta, -sin dtheta], [sin dtheta, cos dtheta]]`
+
+Translation chosen so corrected current pose maps to target:
+
+`[tx, ty]^T = [x_t, y_t]^T - R [x_c, y_c]^T`
+
+Apply to robot and all landmark points `p`:
+
+`p' = R p + t`
+
+Heading update:
+
+`theta' = wrap(theta + dtheta)`
+
+Covariance is slightly inflated after correction to avoid overconfidence.
+
+## 11) Mapping Surface Update
+
+When mapping is active:
+
+- every LiDAR hit point is drawn black on a white canvas
+- this acts as an accumulated map estimate from scan endpoints
+
+On save (`M`):
+
+- current mapping surface is copied
+- true/estimated trajectories are drawn for diagnostics
+- result is written to `maps/` with timestamp filename
+
+## Main File-Level Data Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Main as main.py
+    participant Motion as Collision+Motion
+    participant Sensor as sensor.py
+    participant Frontend as LidarFrontend
+    participant EKF as EKFSLAM
+    participant Loop as LoopClosureDetector
+    participant Map as MappingSurface
+
+    User->>Main: W/A/S/D/M input
+    Main->>Motion: propagate_with_collision(pose, control)
+    Motion-->>Main: true_pose, moved
+    Main->>EKF: predict(noisy odometry)
+    Main->>Sensor: scan(true_pose, map)
+    Sensor-->>Main: measurements
+    Main->>Frontend: build_observations(measurements)
+    Frontend-->>Main: observations
+    Main->>EKF: update(observations)
+    Main->>Loop: register_and_detect(ekf_pose, measurements)
+    Loop-->>Main: optional loop match
+    Main->>EKF: apply_loop_closure(if matched)
+    Main->>Map: accumulate hit points (if mapping active)
+    Main->>Main: render trajectories, rays, landmarks, poses
+```
+
+## Mathematical Assumptions
+
+- map is static and known for collision and synthetic sensing
+- obstacle pixels are dark enough to pass threshold test
+- odometry and LiDAR noise are zero-mean Gaussian
+- data association is nearest-neighbor in Euclidean endpoint space
+- loop closure uses descriptor similarity + spatial gating
+
+## Practical Limitations
+
+- no full graph-SLAM optimizer backend
+- data association can fail in repetitive geometries
+- loop closure correction is rigid transform, not full nonlinear optimization
+- mapping surface is endpoint accumulation, not a probabilistic occupancy grid
+- dynamic obstacles are not modeled
+
+## Suggested Upgrades
+
+1. Replace nearest-neighbor association with Mahalanobis gating + JCBB.
+2. Replace rigid loop correction with pose-graph optimization.
+3. Add log-odds occupancy grid update from full inverse sensor model.
+4. Use robust loss in update/closure steps for outlier resistance.
+5. Add trajectory/map metrics (ATE, RPE, IoU) and experiment logging.
