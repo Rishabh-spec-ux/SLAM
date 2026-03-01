@@ -398,6 +398,107 @@ sequenceDiagram
     Main->>Main: render trajectories, rays, landmarks, poses
 ```
 
+## Worked Numeric Example (One Timestep)
+
+This example shows one simplified EKF-SLAM step with concrete values.
+
+Assume current robot estimate:
+
+- `x = 100.0 px`
+- `y = 80.0 px`
+- `theta = 0.20 rad` (about 11.46 deg)
+
+Control and timestep:
+
+- `v_cmd = 90 px/s`
+- `w_cmd = 0.40 rad/s`
+- `dt = 0.10 s`
+
+### 1) Motion propagation (true model)
+
+Using the non-zero `w` equations:
+
+- `theta' = 0.20 + 0.40*0.10 = 0.24 rad`
+- `x' = x - (v/w)sin(theta) + (v/w)sin(theta + wdt)`
+- `y' = y + (v/w)cos(theta) - (v/w)cos(theta + wdt)`
+
+Numerically (rounded):
+
+- `x' ≈ 108.78`
+- `y' ≈ 81.93`
+- `theta' = 0.24`
+
+### 2) Odometry sample used by EKF predict
+
+Assume sampled odometry noise:
+
+- `v_odom = 90 + N(0,2^2) -> 91.3 px/s`
+- `w_odom = 0.40 + N(0,0.02^2) -> 0.385 rad/s`
+
+EKF predict uses `(v_odom, w_odom)` and updates `(mu_bar, Sigma_bar)`.
+
+### 3) One LiDAR hit and observation
+
+Suppose one beam reports:
+
+- noisy beam angle `alpha = 38 deg = 0.663 rad`
+- measured range `r = 52 px`
+
+Bearing relative to robot:
+
+- `b = wrap(alpha - theta_true) = wrap(0.663 - 0.24) = 0.423 rad`
+
+Observation vector:
+
+- `z = [52, 0.423]^T`
+
+### 4) Predicted measurement to known landmark
+
+Suppose EKF currently stores landmark `j` at:
+
+- `l_j = (155, 105)`
+
+From predicted robot state `(x_bar, y_bar, theta_bar) = (108.6, 82.1, 0.235)`:
+
+- `dx = 155 - 108.6 = 46.4`
+- `dy = 105 - 82.1 = 22.9`
+- `q = dx^2 + dy^2 = 2678.57`
+- `r_hat = sqrt(q) = 51.75`
+- `b_hat = wrap(atan2(22.9,46.4) - 0.235) = 0.223`
+
+So:
+
+- `z_hat = [51.75, 0.223]^T`
+- `nu = z - z_hat = [0.25, 0.200]^T`
+
+### 5) EKF correction (conceptual)
+
+Given Jacobian `H`, innovation covariance `S`, and gain `K`:
+
+- `K = Sigma_bar H^T S^-1`
+- `mu = mu_bar + K nu`
+- `Sigma = (I - K H) Sigma_bar`
+
+Interpretation:
+
+- positive bearing residual (`+0.200 rad`) pulls heading/pose to align with the observed direction
+- range residual (`+0.25 px`) slightly shifts position and landmark estimate
+- covariance shrinks along observed directions
+
+### 6) Loop-closure example (same run, later frame)
+
+Suppose current estimated pose is `(300, 180, 1.10)` and matched historic pose is `(290, 175, 1.00)`:
+
+- `dtheta = wrap(1.00 - 1.10) = -0.10 rad`
+- `R = [[cos(-0.10), -sin(-0.10)], [sin(-0.10), cos(-0.10)]]`
+- `t = [290, 175]^T - R[300,180]^T`
+
+Then every robot/landmark point is corrected with:
+
+- `p' = R p + t`
+
+This globally reduces drift after revisiting a known place.
+
 ## Mathematical Assumptions
 
 - map is static and known for collision and synthetic sensing
