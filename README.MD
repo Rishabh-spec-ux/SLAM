@@ -360,7 +360,7 @@ Covariance is slightly inflated after correction to avoid overconfidence.
 
 When mapping is active:
 
-- every LiDAR hit point is drawn black on a white canvas
+- every LiDAR hit point is reprojected using the EKF estimated pose and drawn black on a white canvas
 - this acts as an accumulated map estimate from scan endpoints
 
 On save (`M`):
