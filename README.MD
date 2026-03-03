@@ -167,17 +167,21 @@ where `v_eff, w_eff` come from actual executed motion after collision effects.
 
 For each beam `i`:
 
-Nominal angle:
+Nominal sensor-frame angle:
 
-`alpha_i = theta_robot + i * delta_alpha`
+`alpha_i = i * delta_alpha`
 
-Noisy beam angle:
+Noisy sensor-frame angle:
 
 `alpha_i_tilde = alpha_i + N(0, sigma_alpha^2)`
 
+World-frame ray angle used for simulation:
+
+`alpha_world = theta_robot + alpha_i_tilde`
+
 Ray endpoint at distance `d`:
 
-`p(d) = [x + d cos(alpha_i_tilde), y + d sin(alpha_i_tilde)]`
+`p(d) = [x + d cos(alpha_world), y + d sin(alpha_world)]`
 
 Ray marching searches first `d*` where either:
 
@@ -194,11 +198,11 @@ Measured range:
 
 Measurement endpoint:
 
-`p_meas = [x + r_meas cos(alpha_i_tilde), y + r_meas sin(alpha_i_tilde)]`
+`p_meas = [x + r_meas cos(alpha_world), y + r_meas sin(alpha_world)]`
 
 ## 5) Landmark Observation Model
 
-From LiDAR hits, nearest map landmark is selected (within association radius).
+From LiDAR ranges/bearings, hit points are reconstructed using the EKF predicted robot pose, then nearest landmark is selected (within association radius).
 
 Observation for landmark `j`:
 
@@ -207,11 +211,11 @@ Observation for landmark `j`:
 where:
 
 - `r`: measured range
-- `b`: measured bearing relative to robot heading
+- `b`: measured bearing in the sensor frame
 
-with bearing normalization:
+with:
 
-`b = wrap(alpha_hit - theta_robot)`
+`b = wrap(alpha_i_tilde)`
 
 ## 6) EKF-SLAM State Definition
 
@@ -388,7 +392,7 @@ sequenceDiagram
     Main->>EKF: predict(noisy odometry)
     Main->>Sensor: scan(true_pose, map)
     Sensor-->>Main: measurements
-    Main->>Frontend: build_observations(measurements)
+    Main->>Frontend: build_observations(measurements, pred_pose)
     Frontend-->>Main: observations
     Main->>EKF: update(observations)
     Main->>LC: register_and_detect(ekf_pose, measurements)
@@ -504,7 +508,7 @@ This globally reduces drift after revisiting a known place.
 - map is static and known for collision and synthetic sensing
 - obstacle pixels are dark enough to pass threshold test
 - odometry and LiDAR noise are zero-mean Gaussian
-- data association is nearest-neighbor in Euclidean endpoint space
+- data association is nearest-neighbor in Euclidean endpoint space using points reconstructed from predicted pose
 - loop closure uses descriptor similarity + spatial gating
 
 ## Practical Limitations
