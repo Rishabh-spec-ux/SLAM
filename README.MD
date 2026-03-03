@@ -448,13 +448,13 @@ Suppose one beam reports:
 - noisy beam angle `alpha = 38 deg = 0.663 rad`
 - measured range `r = 52 px`
 
-Bearing relative to robot:
+Bearing from sensor frame (already relative):
 
-- `b = wrap(alpha - theta_true) = wrap(0.663 - 0.24) = 0.423 rad`
+- `b = wrap(alpha) = 0.663 rad`
 
 Observation vector:
 
-- `z = [52, 0.423]^T`
+- `z = [52, 0.663]^T`
 
 ### 4) Predicted measurement to known landmark
 
@@ -473,7 +473,7 @@ From predicted robot state `(x_bar, y_bar, theta_bar) = (108.6, 82.1, 0.235)`:
 So:
 
 - `z_hat = [51.75, 0.223]^T`
-- `nu = z - z_hat = [0.25, 0.200]^T`
+- `nu = z - z_hat = [0.25, 0.440]^T`
 
 ### 5) EKF correction (conceptual)
 
