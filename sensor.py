@@ -54,9 +54,10 @@ class LidarSensor:
         num_rays = int(360 / self.angle_step_deg)
 
         for i in range(num_rays):
-            base_angle_deg = robot_heading_deg + i * self.angle_step_deg
-            noisy_angle_deg = base_angle_deg + random.gauss(0.0, self.angle_noise_std_deg)
-            theta = math.radians(noisy_angle_deg)
+            base_relative_angle_deg = i * self.angle_step_deg
+            noisy_relative_angle_deg = base_relative_angle_deg + random.gauss(0.0, self.angle_noise_std_deg)
+            world_angle_deg = robot_heading_deg + noisy_relative_angle_deg
+            theta = math.radians(world_angle_deg)
 
             hit = False
             true_distance = self.max_range
@@ -91,7 +92,7 @@ class LidarSensor:
 
             self.measurements.append(
                 LidarMeasurement(
-                    angle_deg=noisy_angle_deg % 360,
+                    angle_deg=noisy_relative_angle_deg % 360,
                     distance=measured_distance,
                     hit_point=(measured_x, measured_y),
                     hit=hit,

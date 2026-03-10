@@ -5,7 +5,7 @@ from pathlib import Path
 import pygame
 
 from env import Environment
-from sensor import LidarSensor
+from sensor import LidarMeasurement, LidarSensor
 from slam import (
     EKFSLAM,
     LidarFrontend,
@@ -85,6 +85,23 @@ def propagate_with_collision(
 def update_mapping_surface(mapping_surface: pygame.Surface, hit_points: list[tuple[float, float]]) -> None:
     for hx, hy in hit_points:
         pygame.draw.circle(mapping_surface, (0, 0, 0), (int(hx), int(hy)), 1)
+
+
+def estimate_hit_points_from_pose(
+    measurements: list[LidarMeasurement],
+    estimated_pose: Pose2D,
+) -> list[tuple[float, float]]:
+    estimated_hit_points: list[tuple[float, float]] = []
+    for measurement in measurements:
+        if not measurement.hit:
+            continue
+
+        rel_angle = wrap_angle(math.radians(measurement.angle_deg))
+        ex = estimated_pose.x + measurement.distance * math.cos(estimated_pose.theta + rel_angle)
+        ey = estimated_pose.y + measurement.distance * math.sin(estimated_pose.theta + rel_angle)
+        estimated_hit_points.append((ex, ey))
+
+    return estimated_hit_points
 
 
 def save_slam_map(
@@ -206,6 +223,7 @@ def main() -> None:
 
         odom_v, odom_w = odom.sample(effective_v, effective_w)
         ekf.predict(odom_v, odom_w, dt)
+        pred_pose = ekf.get_robot_pose()
 
         measurements = lidar.scan(
             (true_pose.x, true_pose.y),
@@ -215,7 +233,7 @@ def main() -> None:
 
         observations = frontend.build_observations(
             measurements,
-            true_pose=true_pose,
+            pred_pose,
             hit_stride=3,
             max_observations=40,
         )
@@ -237,8 +255,9 @@ def main() -> None:
             est_traj.pop(0)
 
         hit_points = lidar.get_hit_points()
+        slam_hit_points = estimate_hit_points_from_pose(measurements, estimated_pose)
         if mapping_active:
-            update_mapping_surface(mapping_surface, hit_points)
+            update_mapping_surface(mapping_surface, slam_hit_points)
 
         env.clear_point_cloud()
         env.extend_point_cloud(hit_points)

@@ -127,7 +127,7 @@ class LidarFrontend:
     def build_observations(
         self,
         measurements: list[LidarMeasurement],
-        true_pose: Pose2D,
+        robot_pose: Pose2D,
         hit_stride: int = 3,
         max_observations: int = 40,
     ) -> list[LandmarkObservation]:
@@ -137,12 +137,13 @@ class LidarFrontend:
             if not measurement.hit or i % hit_stride != 0:
                 continue
 
-            hit_x, hit_y = measurement.hit_point
+            bearing_rad = wrap_angle(math.radians(measurement.angle_deg))
+            hit_x = robot_pose.x + measurement.distance * math.cos(robot_pose.theta + bearing_rad)
+            hit_y = robot_pose.y + measurement.distance * math.sin(robot_pose.theta + bearing_rad)
             landmark_id = self._nearest_landmark(hit_x, hit_y)
             if landmark_id is None:
                 continue
 
-            bearing_rad = wrap_angle(math.radians(measurement.angle_deg) - true_pose.theta)
             obs = LandmarkObservation(
                 landmark_id=landmark_id,
                 range_m=measurement.distance,
